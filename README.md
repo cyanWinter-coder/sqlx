@@ -58,8 +58,51 @@ SELECT a.id, a.name, b.id, b.name FROM foos AS a JOIN foos AS b ON a.parent = b.
 ```
 
 making a struct or map destination ambiguous.  Use `AS` in your queries
-to give columns distinct names, `rows.Scan` to scan them manually, or 
+to give columns distinct names, `rows.Scan` to scan them manually, or
 `SliceScan` to get a slice of results.
+
+## strict, auditable struct scanning
+
+During a rolling database upgrade, the same query may temporarily return an
+older column set.  The default `StructScan` only reports a generic
+`missing destination name` error, which does not say which fields were safely
+mapped.  Strict scanning is an opt-in mode that returns an auditable mapping
+report alongside the scan while leaving `StructScan`, `Get`, `Select` and
+`SliceScan` unchanged.
+
+```go
+rows, err := db.Queryx("SELECT id, first_name FROM people")
+// ...
+for rows.Next() {
+    var p Person
+    report, err := rows.StrictStructScan(&p, sqlx.StrictScanOptions{})
+    if err != nil {
+        var se *sqlx.StrictScanError
+        // errors.As exposes the audit; errors.Is still reaches the driver error.
+        if errors.As(err, &se) {
+            log.Print(se.Report.MissingFields, se.Report.UnknownColumns)
+        }
+        return err
+    }
+    _ = report // FilledFields, MissingFields, UnknownColumns, ...
+}
+```
+
+* `(*Rows).StrictStructScan`, `(*Row).StrictStructScan` and the package-level
+  `StrictStructScan` return a `*MappingReport` listing filled fields, missing
+  target fields, unknown result columns, duplicate columns and ambiguous
+  `db` tags.  All name lists are sorted and de-duplicated.
+* Mapping problems fail before the first row is read, so rejected scans never
+  write zero values into the destination.  `StrictAllowPartial` instead keeps
+  the matched fields, sets `MappingReport.Partial` and reports exactly which
+  fields were not populated.
+* Duplicate columns, type conversion failures, early `Close` and context
+  cancellation are merged into the same `*StrictScanError`; the underlying
+  error remains reachable via `errors.Is`/`errors.Unwrap`
+  (e.g. `sql.ErrNoRows`, `context.Canceled`).
+* Strict scans reuse the same statement, mapper and context machinery as
+  ordinary scans.  Plain `StructScan`, `Get`, `Select` and `SliceScan` keep
+  their existing behavior and error messages.
 
 ## usage
 

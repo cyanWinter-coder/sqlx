@@ -582,6 +582,11 @@ type Rows struct {
 	started bool
 	fields  [][]int
 	values  []interface{}
+	// strict scan keeps its own cache so strict and non-strict StructScans
+	// never observe each other's policy decisions
+	strictStarted bool
+	strictPlan    *strictPlan
+	strictValues  []interface{}
 }
 
 // SliceScan using this Rows.
